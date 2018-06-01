@@ -1,16 +1,25 @@
 package io.ydanneg;
 
-import com.mkyong.service.HelloMessageService;
-import io.ydanneg.service.TimeCollectorService;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.cli.*;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.*;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
+import static java.lang.System.exit;
 
 import java.util.Arrays;
 
-import static java.lang.System.exit;
+import lombok.extern.slf4j.Slf4j;
+
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.DefaultParser;
+import org.apache.commons.cli.HelpFormatter;
+import org.apache.commons.cli.Option;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.Banner;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+import io.ydanneg.service.TimeCollectorService;
 
 @SpringBootApplication
 @Slf4j
