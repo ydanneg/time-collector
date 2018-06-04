@@ -39,6 +39,7 @@ public class TimestampDaoService {
 		});
 	}
 
+	private static long lastTs = 0;
 	public Completable saveOne(Long timestamp) throws IOException {
 		return Completable.fromAction(() -> {
 					log.debug("saving: " + timestamp);
@@ -50,12 +51,18 @@ public class TimestampDaoService {
 
 					try {
 						log.trace("waiting...");
-						Thread.sleep(new RandomDataGenerator().nextLong(50, 400));
+						Thread.sleep(new RandomDataGenerator().nextLong(500, 1000));
 						log.trace("waited!");
 					} catch (InterruptedException e) {
 						//
 					}
 					log.debug("saved: " + timestamp);
+
+					if (timestamp < lastTs) {
+						throw new RuntimeException("!!!!");
+					}
+					lastTs = timestamp;
+
 				}
 		);
 	}

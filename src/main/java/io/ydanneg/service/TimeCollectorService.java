@@ -45,7 +45,7 @@ public class TimeCollectorService {
                             }
                             // propagate unexpected error
                             return Flowable.error(throwable);
-                        })))
+                        })), false, 1)
 
                 .blockingAwait();
 
