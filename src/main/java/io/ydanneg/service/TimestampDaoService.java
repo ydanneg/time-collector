@@ -6,10 +6,10 @@ import java.util.Random;
 
 import lombok.extern.slf4j.Slf4j;
 
+import org.apache.commons.math3.random.RandomDataGenerator;
 import org.springframework.stereotype.Service;
 
 import io.reactivex.Completable;
-import io.reactivex.schedulers.Schedulers;
 
 @Service
 @Slf4j
@@ -27,15 +27,36 @@ public class TimestampDaoService {
 			//                        System.out.println("runtime");
 			//                        throw new RuntimeException("something went wrong");
 			//                    }
-//			try {
-//				log.trace("waiting...");
-//				Thread.sleep(new RandomDataGenerator().nextLong(2000, 4000));
-//				log.trace("waited!");
-//			} catch (InterruptedException e) {
-//				//
-//			}
+			try {
+				log.trace("waiting...");
+				Thread.sleep(new RandomDataGenerator().nextLong(200, 2000));
+				log.trace("waited!");
+			} catch (InterruptedException e) {
+				//
+			}
 
 			log.debug("saved: " + timestamps);
-		}).observeOn(Schedulers.computation());
+		});
+	}
+
+	public Completable saveOne(Long timestamp) throws IOException {
+		return Completable.fromAction(() -> {
+					log.debug("saving: " + timestamp);
+
+					if (new RandomDataGenerator().nextInt(0, 2) == 0) {
+						log.trace("IO");
+						throw new IOException();
+					}
+
+					try {
+						log.trace("waiting...");
+						Thread.sleep(new RandomDataGenerator().nextLong(50, 400));
+						log.trace("waited!");
+					} catch (InterruptedException e) {
+						//
+					}
+					log.debug("saved: " + timestamp);
+				}
+		);
 	}
 }
