@@ -26,38 +26,47 @@ public class TimestampDaoService {
 	private long simDelay;
 
 	private static long sLastTs = 0;
-	public Completable saveAll(List<Long> timestamps) throws IOException {
+
+	private boolean fileCreated;
+
+	public Completable saveAll(List<Long> timestamps) {
 		return Completable.fromAction(() -> {
-					log.debug("saving: " + timestamps);
-
-					// simulate IOException
-					if (simIOExceptionProbability > 0 && random.nextInt(100) < simIOExceptionProbability) {
-						log.trace("throwing simulated IOException");
-						throw new IOException();
-					}
-
-					// simulate delay
-					if (simDelay > 0) {
-						try {
-							log.trace("simulated delay start");
-							Thread.sleep(simDelay);
-							log.trace("simulated delay end");
-						} catch (InterruptedException e) {
-							//
-						}
-					}
-
-					if (timestamps.get(0) < sLastTs) {
-						throw new RuntimeException("error");
-					}
-					sLastTs = timestamps.get(timestamps.size() - 1);
-
-					// persist into file
-					File file = new File("output.txt");
-					FileUtils.writeLines(file, "UTF-8", timestamps, true);
-
-					log.debug("saved: " + timestamps);
+					doSaveAll(timestamps);
 				}
 		);
+	}
+
+	public void doSaveAll(List<Long> timestamps) throws IOException, InterruptedException {
+		log.debug("saving: " + timestamps);
+
+		// simulate IOException
+		if (simIOExceptionProbability > 0 && random.nextInt(100) <= simIOExceptionProbability) {
+			log.trace("throwing simulated IOException");
+			throw new IOException();
+		}
+
+		// simulate delay
+		if (simDelay > 0) {
+			try {
+				log.trace("simulated delay start");
+				Thread.sleep(simDelay);
+			} finally {
+				log.trace("simulated delay end");
+			}
+		}
+
+		// assert persistence order
+		if (timestamps.get(0) < sLastTs) {
+			throw new RuntimeException("broken persistence order!!! OH NO!!!");
+		}
+		sLastTs = timestamps.get(timestamps.size() - 1);
+
+		// persist into file
+		File file = new File("output.txt");
+		FileUtils.writeLines(file, "UTF-8", timestamps, fileCreated);
+		// file is created now
+		fileCreated = true;
+
+		log.debug("saved: " + timestamps);
 	}
 }

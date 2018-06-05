@@ -12,6 +12,7 @@ public class TimestampService {
 
 	public Flowable<Long> getTimestamps(long periodInMillis) {
 		return Flowable.interval(periodInMillis, TimeUnit.MILLISECONDS)
-				.map(ignored -> Instant.now().toEpochMilli());
+				.map(ignored -> Instant.now().toEpochMilli())
+				.share();
 	}
 }

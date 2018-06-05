@@ -12,7 +12,6 @@ import org.springframework.stereotype.Service;
 
 import io.reactivex.BackpressureOverflowStrategy;
 import io.reactivex.Flowable;
-import io.reactivex.Scheduler;
 import io.reactivex.schedulers.Schedulers;
 
 @Service
@@ -26,11 +25,11 @@ public class TimeCollectorService {
     @Value("${io.ydanneg.timecollector.timestamp.period:1000}")
     private Long timestampPeriodInMillis;
 
-    @Value("${io.ydanneg.timecollector.buffer:5000}")
-    private Long backpressureBufferLimit;
+    @Value("${io.ydanneg.timecollector.capacity:5000}")
+    private Long capacity;
 
-    @Value("${io.ydanneg.timecollector.window.size:5}")
-    private Long windowSize;
+    @Value("${io.ydanneg.timecollector.window:5}")
+    private int windowSize;
 
     @Autowired
     private final TimestampService timestampService;
@@ -39,26 +38,30 @@ public class TimeCollectorService {
 
     public void startService() {
 
-        final Scheduler single = Schedulers.newThread();
-        Flowable.interval(timestampPeriodInMillis, TimeUnit.MILLISECONDS)
+        final Flowable<Long> intervalPublisher = timestampService.getTimestamps(timestampPeriodInMillis);
+
+        intervalPublisher
+                .observeOn(Schedulers.newThread())
+                .subscribe(aLong -> log.info(String.valueOf(aLong)));
+
+        intervalPublisher
                 .doOnNext(aLong -> log.debug("emitted: " + aLong))
-                .onBackpressureBuffer(backpressureBufferLimit, () -> log.trace("backpressure overflow. dropping oldest"), BackpressureOverflowStrategy.DROP_OLDEST)
-                .observeOn(single)
-                .window(windowSize)
-                .flatMapSingle(Flowable::toList)
+                .onBackpressureBuffer(capacity, () -> log.warn("backpressure buffer overflow. dropping oldest"), BackpressureOverflowStrategy.DROP_OLDEST)
+                .observeOn(Schedulers.newThread())
                 .doOnNext(aLong -> log.debug("processing: " + aLong))
-                .flatMapCompletable(ts -> timestampDaoService.saveAll(ts)
+                .buffer(windowSize)
+                .doOnNext(aLong -> log.debug("processing window: " + aLong))
+                .flatMapCompletable(longs -> timestampDaoService.saveAll(longs)
                         .doOnError(error -> log.warn("failed to save into DB."))
                         .retryWhen(throwableFlowable -> throwableFlowable.flatMap(throwable -> {
                             if (throwable instanceof IOException) {
                                 log.info("retry scheduled");
                                 // schedule retry
-                                return Flowable.timer(retryDelayInMillis, TimeUnit.MILLISECONDS, single);
+                                return Flowable.timer(retryDelayInMillis, TimeUnit.MILLISECONDS);
                             }
                             // propagate unexpected error
                             return Flowable.error(throwable);
                         })), false, 1)
-
                 .blockingAwait();
     }
 }
