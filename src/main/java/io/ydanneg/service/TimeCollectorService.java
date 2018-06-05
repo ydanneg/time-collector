@@ -1,7 +1,5 @@
 package io.ydanneg.service;
 
-import java.io.IOException;
-import java.net.ConnectException;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -23,68 +21,69 @@ import io.ydanneg.model.TimestampRepository;
 @Slf4j
 public class TimeCollectorService {
 
-    @Value("${io.ydanneg.timecollector.db.retry.delay:5000}")
-    private Long retryDelayInMillis;
+	@Value("${io.ydanneg.timecollector.db.retry.delay:5000}")
+	private Long retryDelayInMillis;
 
-    @Value("${io.ydanneg.timecollector.timestamp.period:1000}")
-    private Long timestampPeriodInMillis;
+	@Value("${io.ydanneg.timecollector.timestamp.period:1000}")
+	private Long timestampPeriodInMillis;
 
-    @Value("${io.ydanneg.timecollector.capacity:5000}")
-    private Long capacity;
+	@Value("${io.ydanneg.timecollector.capacity:5000}")
+	private Long capacity;
 
-    @Value("${io.ydanneg.timecollector.window:5}")
-    private int windowSize;
+	@Value("${io.ydanneg.timecollector.window:5}")
+	private int windowSize;
 
-    @Autowired
-    private TimestampRepository repository;
+	@Autowired
+	private TimestampRepository repository;
 
-    @Autowired
-    private final TimestampService timestampService;
-    @Autowired
-    private final TimestampDaoService timestampDaoService;
+	@Autowired
+	private final TimestampService timestampService;
+	@Autowired
+	private final TimestampDaoService timestampDaoService;
 
-    public void test() {
-        System.out.println("--START--");
-        repository.findAll()
-                .map(Timestamp::getTs)
-                .blockingSubscribe(
-                        System.out::println,
-                        System.err::println,
-                        () -> System.out.println("--END--")
-                );
-    }
+	public void test() {
+		System.out.println("--START--");
+		repository.findAll()
+				.map(Timestamp::getTs)
+				.blockingSubscribe(
+						System.out::println,
+						System.err::println,
+						() -> System.out.println("--END--")
+				);
+	}
 
-    public void startService() {
-        final Flowable<Long> intervalPublisher = timestampService.getTimestamps(timestampPeriodInMillis);
+	public void startService() {
+		final Flowable<Long> intervalPublisher = timestampService.getTimestamps(timestampPeriodInMillis);
 
-        intervalPublisher
-                .observeOn(Schedulers.newThread())
-                .subscribe(aLong -> log.info(String.valueOf(aLong)));
+		intervalPublisher
+				.observeOn(Schedulers.newThread())
+				.subscribe(aLong -> log.info(String.valueOf(aLong)));
 
-        intervalPublisher
-                .doOnNext(aLong -> log.debug("emitted: " + aLong))
-                .onBackpressureBuffer(capacity, () -> log.warn("backpressure buffer overflow. dropping oldest"), BackpressureOverflowStrategy.DROP_OLDEST)
-                .observeOn(Schedulers.newThread())
-                .doOnNext(aLong -> log.debug("processing: " + aLong))
-                .buffer(windowSize)
-                .doOnNext(aLong -> log.debug("processing window: " + aLong))
-//                .observeOn(Schedulers.newThread())
-                .map(longs -> longs.stream()
-                        .map(ts -> Timestamp.builder().ts(ts).build())
-                        .collect(Collectors.toList()))
-                .flatMap(longs -> repository.saveAll(longs)
-                        .doOnNext(timestamp -> log.info("saved: " + timestamp))
-                        .doOnError(error -> log.error("failed to save into DB."))
-                        .retryWhen(throwableFlowable -> throwableFlowable.flatMap(throwable -> {
-                            if (throwable instanceof IOException || throwable.getCause() instanceof IOException || throwable instanceof ConnectException) {
-                                log.info("retry scheduled");
-                                // schedule retry
-                                return Flowable.timer(retryDelayInMillis, TimeUnit.MILLISECONDS);
-                            }
-                            // propagate unexpected error
-                            return Flowable.error(throwable);
-                        })), false, 1)
-                .doOnError(throwable -> log.error("persistence failed", throwable))
-                .blockingSubscribe();
-    }
+		intervalPublisher
+				.doOnNext(aLong -> log.debug("emitted: " + aLong))
+				.onBackpressureBuffer(capacity, () -> log.warn("backpressure buffer overflow. dropping oldest"), BackpressureOverflowStrategy.DROP_OLDEST)
+				.observeOn(Schedulers.newThread())
+				.doOnNext(aLong -> log.debug("processing: " + aLong))
+				.buffer(windowSize)
+				.doOnNext(aLong -> log.debug("processing window: " + aLong))
+				//                .observeOn(Schedulers.newThread())
+				.map(longs -> longs.stream()
+						.map(ts -> Timestamp.builder().ts(ts).build())
+						.collect(Collectors.toList()))
+				.flatMap(longs -> repository.saveAll(longs)
+						.doOnNext(timestamp -> log.info("saved: " + timestamp))
+						.doOnError(error -> log.error("failed to save into DB.", error))
+						.observeOn(Schedulers.newThread())
+						.retryWhen(throwableFlowable -> throwableFlowable.flatMap(throwable -> {
+							//                            if (throwable instanceof IOException || throwable.getCause() instanceof IOException) {
+							log.info("retry scheduled");
+							// schedule retry
+							return Flowable.timer(retryDelayInMillis, TimeUnit.MILLISECONDS);
+							//                            }
+							// propagate unexpected error
+							//                            return Flowable.error(throwable);
+						})), false, 1)
+				.doOnError(throwable -> log.info("persistence failed", throwable))
+				.blockingSubscribe();
+	}
 }

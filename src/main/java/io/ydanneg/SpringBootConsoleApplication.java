@@ -13,11 +13,17 @@ import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
+import org.springframework.beans.factory.BeanCreationException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.Banner;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.mongodb.core.MongoClientOptionsFactoryBean;
+
+import com.mongodb.MongoClientOptions;
 
 import io.ydanneg.service.TimeCollectorService;
 
@@ -78,5 +84,30 @@ public class SpringBootConsoleApplication implements CommandLineRunner {
         }
 
         exit(0);
+    }
+
+    @Configuration
+    public class MongoDbSettings {
+
+        @Bean
+        public MongoClientOptions mongoClientOptions() {
+            try {
+                final MongoClientOptionsFactoryBean bean = new MongoClientOptionsFactoryBean();
+                bean.setSocketTimeout(10000);
+                bean.setConnectTimeout(10000);
+                bean.setServerSelectionTimeout(1000);
+                bean.afterPropertiesSet();
+                return bean.getObject();
+            } catch (final Exception e) {
+                throw new BeanCreationException(e.getMessage(), e);
+            }
+
+//            return MongoClientOptions.builder()
+//                    .socketTimeout(15000)
+//                    .connectTimeout(10000)
+//                    .serverSelectionTimeout(1000)
+//                    .build();
+        }
+
     }
 }
