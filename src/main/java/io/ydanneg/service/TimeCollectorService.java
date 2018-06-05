@@ -1,7 +1,9 @@
 package io.ydanneg.service;
 
 import java.io.IOException;
+import java.net.ConnectException;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,6 +15,8 @@ import org.springframework.stereotype.Service;
 import io.reactivex.BackpressureOverflowStrategy;
 import io.reactivex.Flowable;
 import io.reactivex.schedulers.Schedulers;
+import io.ydanneg.model.Timestamp;
+import io.ydanneg.model.TimestampRepository;
 
 @Service
 @RequiredArgsConstructor
@@ -32,12 +36,25 @@ public class TimeCollectorService {
     private int windowSize;
 
     @Autowired
+    private TimestampRepository repository;
+
+    @Autowired
     private final TimestampService timestampService;
     @Autowired
     private final TimestampDaoService timestampDaoService;
 
-    public void startService() {
+    public void test() {
+        System.out.println("--START--");
+        repository.findAll()
+                .map(Timestamp::getTs)
+                .blockingSubscribe(
+                        System.out::println,
+                        System.err::println,
+                        () -> System.out.println("--END--")
+                );
+    }
 
+    public void startService() {
         final Flowable<Long> intervalPublisher = timestampService.getTimestamps(timestampPeriodInMillis);
 
         intervalPublisher
@@ -51,10 +68,15 @@ public class TimeCollectorService {
                 .doOnNext(aLong -> log.debug("processing: " + aLong))
                 .buffer(windowSize)
                 .doOnNext(aLong -> log.debug("processing window: " + aLong))
-                .flatMapCompletable(longs -> timestampDaoService.saveAll(longs)
-                        .doOnError(error -> log.warn("failed to save into DB."))
+//                .observeOn(Schedulers.newThread())
+                .map(longs -> longs.stream()
+                        .map(ts -> Timestamp.builder().ts(ts).build())
+                        .collect(Collectors.toList()))
+                .flatMap(longs -> repository.saveAll(longs)
+                        .doOnNext(timestamp -> log.info("saved: " + timestamp))
+                        .doOnError(error -> log.error("failed to save into DB."))
                         .retryWhen(throwableFlowable -> throwableFlowable.flatMap(throwable -> {
-                            if (throwable instanceof IOException) {
+                            if (throwable instanceof IOException || throwable.getCause() instanceof IOException || throwable instanceof ConnectException) {
                                 log.info("retry scheduled");
                                 // schedule retry
                                 return Flowable.timer(retryDelayInMillis, TimeUnit.MILLISECONDS);
@@ -62,6 +84,7 @@ public class TimeCollectorService {
                             // propagate unexpected error
                             return Flowable.error(throwable);
                         })), false, 1)
-                .blockingAwait();
+                .doOnError(throwable -> log.error("persistence failed", throwable))
+                .blockingSubscribe();
     }
 }

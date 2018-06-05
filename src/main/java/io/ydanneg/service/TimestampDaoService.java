@@ -8,16 +8,23 @@ import java.util.Random;
 import lombok.extern.slf4j.Slf4j;
 
 import org.apache.commons.io.FileUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import io.reactivex.Completable;
+import io.reactivex.Flowable;
+import io.ydanneg.model.Timestamp;
+import io.ydanneg.model.TimestampRepository;
 
 @Service
 @Slf4j
 public class TimestampDaoService {
 
 	private final Random random = new Random();
+
+	@Autowired
+	private TimestampRepository repository;
 
 	@Value("${io.ydanneg.timecollector.sim.ioexception:0}")
 	private int simIOExceptionProbability;
@@ -30,13 +37,11 @@ public class TimestampDaoService {
 	private boolean fileCreated;
 
 	public Completable saveAll(List<Long> timestamps) {
-		return Completable.fromAction(() -> {
-					doSaveAll(timestamps);
-				}
+		return Completable.fromAction(() -> doSaveAll(timestamps)
 		);
 	}
 
-	public void doSaveAll(List<Long> timestamps) throws IOException, InterruptedException {
+	public void doSaveAll(List<Long> timestamps) throws IOException {
 		log.debug("saving: " + timestamps);
 
 		// simulate IOException
@@ -50,6 +55,8 @@ public class TimestampDaoService {
 			try {
 				log.trace("simulated delay start");
 				Thread.sleep(simDelay);
+			} catch (InterruptedException e) {
+				// ignored
 			} finally {
 				log.trace("simulated delay end");
 			}
@@ -68,5 +75,9 @@ public class TimestampDaoService {
 		fileCreated = true;
 
 		log.debug("saved: " + timestamps);
+	}
+
+	public Flowable<Timestamp> findAll() {
+		return repository.findAll();
 	}
 }
