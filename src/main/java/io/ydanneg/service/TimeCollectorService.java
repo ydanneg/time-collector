@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import io.reactivex.BackpressureOverflowStrategy;
@@ -19,7 +20,17 @@ import io.reactivex.schedulers.Schedulers;
 @Slf4j
 public class TimeCollectorService {
 
-    private static final int RETRY_DELAY = 500;
+    @Value("${io.ydanneg.timecollector.db.retry.delay:5000}")
+    private Long retryDelayInMillis;
+
+    @Value("${io.ydanneg.timecollector.timestamp.period:1000}")
+    private Long timestampPeriodInMillis;
+
+    @Value("${io.ydanneg.timecollector.buffer:5000}")
+    private Long backpressureBufferLimit;
+
+    @Value("${io.ydanneg.timecollector.window.size:5}")
+    private Long windowSize;
 
     @Autowired
     private final TimestampService timestampService;
@@ -28,89 +39,26 @@ public class TimeCollectorService {
 
     public void startService() {
 
-        final Scheduler single = Schedulers.single();
-        Flowable.interval(100, TimeUnit.MILLISECONDS)
-                //                .observeOn(Schedulers.newThread())
+        final Scheduler single = Schedulers.newThread();
+        Flowable.interval(timestampPeriodInMillis, TimeUnit.MILLISECONDS)
                 .doOnNext(aLong -> log.debug("emitted: " + aLong))
-                .onBackpressureBuffer(50, () -> log.info("DROP"), BackpressureOverflowStrategy.DROP_OLDEST)
+                .onBackpressureBuffer(backpressureBufferLimit, () -> log.trace("backpressure overflow. dropping oldest"), BackpressureOverflowStrategy.DROP_OLDEST)
                 .observeOn(single)
-                .doOnNext(aLong -> log.debug("pressured: " + aLong))
-                .flatMapCompletable(ts -> timestampDaoService.saveOne(ts)
+                .window(windowSize)
+                .flatMapSingle(Flowable::toList)
+                .doOnNext(aLong -> log.debug("processing: " + aLong))
+                .flatMapCompletable(ts -> timestampDaoService.saveAll(ts)
                         .doOnError(error -> log.warn("failed to save into DB."))
                         .retryWhen(throwableFlowable -> throwableFlowable.flatMap(throwable -> {
                             if (throwable instanceof IOException) {
                                 log.info("retry scheduled");
                                 // schedule retry
-                                return Flowable.timer(RETRY_DELAY, TimeUnit.MILLISECONDS, single);
+                                return Flowable.timer(retryDelayInMillis, TimeUnit.MILLISECONDS, single);
                             }
                             // propagate unexpected error
                             return Flowable.error(throwable);
                         })), false, 1)
 
                 .blockingAwait();
-
-        //
-        //
-        //        final Flowable<Long> observable = timestampService.getTimestamps(1, TimeUnit.MILLISECONDS)
-        //                .onBackpressureBuffer(1, () -> {
-        //                    log.info("DROP");
-        //                }, BackpressureOverflowStrategy.DROP_OLDEST)
-        //                //                .doOnNext(System.out::println)
-        //                .doOnError(error -> log.error("failed to get a timestamp", error))
-        //                //                .subscribeOn(Schedulers.single())
-        //                .share(); // make it connectable for multicasting
-        //        //
-        //        //        try {
-        //        //            Thread.sleep(5000);
-        //        //        } catch (InterruptedException e) {
-        //        //            e.printStackTrace();
-        //        //        }
-        //
-        //        observable
-        //                .subscribeOn(Schedulers.newThread())
-        //                .subscribe(aLong -> log.info("sub1: " + aLong), System.err::println);
-        //
-        ////        final Scheduler single = Schedulers.single();
-        ////        observable
-        ////                .subscribeOn(Schedulers.computation())
-        ////                .window(1, TimeUnit.SECONDS)
-        ////                .flatMapSingle(Flowable::toList)
-        ////                .observeOn(single)
-        ////                .flatMapCompletable(longs -> timestampDaoService.save(longs)
-        ////                        .doOnError(error -> log.warn("failed to save into DB.")), false, 1
-        ////                )
-        ////                .retryWhen(throwableFlowable -> throwableFlowable.flatMap(throwable -> {
-        ////                    if (throwable instanceof IOException) {
-        ////                        log.info("retry scheduled");
-        ////                        // schedule retry
-        ////                        return Flowable.timer(RETRY_DELAY, TimeUnit.MILLISECONDS, single);
-        ////                    }
-        ////                    // propagate unexpected error
-        ////                    return Flowable.error(throwable);
-        ////                }, false, 1))
-        ////                //                .subscribeOn(Schedulers.newThread())
-        ////                .doOnError(error -> log.error("error: " + error))
-        ////                .subscribe();
-        //
-        //        observable
-        //                .onBackpressureBuffer(1, () -> {
-        //                    log.info("DROP");
-        //                }, BackpressureOverflowStrategy.DROP_OLDEST)
-        //                .subscribeOn(Schedulers.newThread())
-        //                .flatMapCompletable(timestampDaoService::saveOne)
-        //                .blockingGet();
-        ////                .blockingSubscribe(); // block until complete or error
-    }
-
-    private Flowable<Long> retryOnIOException(Flowable<Long> completable) {
-        return completable.retryWhen(throwableFlowable -> throwableFlowable.flatMap(throwable -> {
-            if (throwable instanceof IOException) {
-                log.info("retry scheduled");
-                // schedule retry
-                return Flowable.timer(RETRY_DELAY, TimeUnit.MILLISECONDS);
-            }
-            // propagate unexpected error
-            return Flowable.error(throwable);
-        }));
     }
 }

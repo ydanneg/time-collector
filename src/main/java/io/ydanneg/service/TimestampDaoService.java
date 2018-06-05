@@ -1,12 +1,14 @@
 package io.ydanneg.service;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.List;
 import java.util.Random;
 
 import lombok.extern.slf4j.Slf4j;
 
-import org.apache.commons.math3.random.RandomDataGenerator;
+import org.apache.commons.io.FileUtils;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import io.reactivex.Completable;
@@ -15,54 +17,46 @@ import io.reactivex.Completable;
 @Slf4j
 public class TimestampDaoService {
 
-	public Completable save(List<Long> timestamps) {
-		log.debug("saving: " + timestamps);
+	private final Random random = new Random();
+
+	@Value("${io.ydanneg.timecollector.sim.ioexception:0}")
+	private int simIOExceptionProbability;
+
+	@Value("${io.ydanneg.timecollector.sim.delay:0}")
+	private long simDelay;
+
+	private static long sLastTs = 0;
+	public Completable saveAll(List<Long> timestamps) throws IOException {
 		return Completable.fromAction(() -> {
-//			final int rndValue = new RandomDataGenerator().nextInt(0, 2);
-			if (new Random().nextBoolean()) {
-				log.trace("IO");
-				throw new IOException();
-			}
-			//                    if (rndValue == 1) {
-			//                        System.out.println("runtime");
-			//                        throw new RuntimeException("something went wrong");
-			//                    }
-			try {
-				log.trace("waiting...");
-				Thread.sleep(new RandomDataGenerator().nextLong(200, 2000));
-				log.trace("waited!");
-			} catch (InterruptedException e) {
-				//
-			}
+					log.debug("saving: " + timestamps);
 
-			log.debug("saved: " + timestamps);
-		});
-	}
-
-	private static long lastTs = 0;
-	public Completable saveOne(Long timestamp) throws IOException {
-		return Completable.fromAction(() -> {
-					log.debug("saving: " + timestamp);
-
-					if (new RandomDataGenerator().nextInt(0, 2) == 0) {
-						log.trace("IO");
+					// simulate IOException
+					if (simIOExceptionProbability > 0 && random.nextInt(100) < simIOExceptionProbability) {
+						log.trace("throwing simulated IOException");
 						throw new IOException();
 					}
 
-					try {
-						log.trace("waiting...");
-						Thread.sleep(new RandomDataGenerator().nextLong(500, 1000));
-						log.trace("waited!");
-					} catch (InterruptedException e) {
-						//
+					// simulate delay
+					if (simDelay > 0) {
+						try {
+							log.trace("simulated delay start");
+							Thread.sleep(simDelay);
+							log.trace("simulated delay end");
+						} catch (InterruptedException e) {
+							//
+						}
 					}
-					log.debug("saved: " + timestamp);
 
-					if (timestamp < lastTs) {
-						throw new RuntimeException("!!!!");
+					if (timestamps.get(0) < sLastTs) {
+						throw new RuntimeException("error");
 					}
-					lastTs = timestamp;
+					sLastTs = timestamps.get(timestamps.size() - 1);
 
+					// persist into file
+					File file = new File("output.txt");
+					FileUtils.writeLines(file, "UTF-8", timestamps, true);
+
+					log.debug("saved: " + timestamps);
 				}
 		);
 	}
