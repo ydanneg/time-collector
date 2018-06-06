@@ -43,13 +43,15 @@ public class TimeCollectorService {
 
 	public void test() {
 		System.out.println("--START--");
-		repository.findAll()
+		final Long total = repository.findAll()
 				.map(Timestamp::getTs)
-				.blockingSubscribe(
-						System.out::println,
-						System.err::println,
-						() -> System.out.println("--END--")
-				);
+				.doOnNext(System.out::println)
+				.doOnError(System.out::println)
+				.count()
+				.blockingGet();
+
+		System.out.println("Total: " + total);
+		System.out.println("--END--");
 	}
 
 	public void startService() {
