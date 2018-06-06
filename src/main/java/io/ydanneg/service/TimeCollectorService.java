@@ -1,71 +1,89 @@
 package io.ydanneg.service;
 
-import java.io.IOException;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import io.reactivex.BackpressureStrategy;
-import io.reactivex.Completable;
+import io.reactivex.BackpressureOverflowStrategy;
 import io.reactivex.Flowable;
-import io.reactivex.Observable;
 import io.reactivex.schedulers.Schedulers;
-import io.reactivex.subjects.PublishSubject;
+import io.ydanneg.model.Timestamp;
+import io.ydanneg.model.TimestampRepository;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class TimeCollectorService {
 
-    private static final int RETRY_DELAY = 5000;
+	@Value("${io.ydanneg.timecollector.db.retry.delay:5000}")
+	private Long retryDelayInMillis;
 
-    @Autowired
-    private final TimestampService timestampService;
-    @Autowired
-    private final TimestampDaoService timestampDaoService;
+	@Value("${io.ydanneg.timecollector.timestamp.period:1000}")
+	private Long timestampPeriodInMillis;
 
-    PublishSubject<Long> source = PublishSubject.create();
+	@Value("${io.ydanneg.timecollector.capacity:5000}")
+	private Long capacity;
 
-    public void startService() {
+	@Value("${io.ydanneg.timecollector.window:5}")
+	private int windowSize;
 
-        final Observable<Long> observable = timestampService.getTimestamps(1, TimeUnit.SECONDS)
-                .doOnError(error -> log.error("failed to get a timestamp", error))
-                .share(); // make it connectable for multicasting
+	@Autowired
+	private TimestampRepository repository;
 
-        observable
-                .observeOn(Schedulers.newThread())
-                .subscribe(aLong -> log.info("sub1: " + aLong), System.err::println);
+	@Autowired
+	private final TimestampService timestampService;
+	@Autowired
+	private final TimestampDaoService timestampDaoService;
 
-        observable
-                .toFlowable(BackpressureStrategy.BUFFER)
-                .buffer(5000, TimeUnit.MILLISECONDS)
-                //                .window(5)
-                //                .flatMapSingle(Flowable::toList)
-                .doOnNext(ts -> log.trace("sub2: " + ts))
-                .flatMapCompletable(longs -> timestampDaoService.save(longs)
-                        .doOnError(error -> log.warn("failed to save into DB."))
-                )
-                .compose(this::retryOnIOException)
-                //                .observeOn(Schedulers.computation())
-                .subscribe(() -> log.trace("sub2.complete"), error -> log.error("", error));
+	public void test() {
+		System.out.println("--START--");
+		repository.findAll()
+				.map(Timestamp::getTs)
+				.blockingSubscribe(
+						System.out::println,
+						System.err::println,
+						() -> System.out.println("--END--")
+				);
+	}
 
-        observable
-                .blockingSubscribe(); // block until complete or error
-    }
+	public void startService() {
+		final Flowable<Long> intervalPublisher = timestampService.getTimestamps(timestampPeriodInMillis);
 
-    private Completable retryOnIOException(Completable completable) {
-        return completable.retryWhen(throwableFlowable -> throwableFlowable.flatMap(throwable -> {
-            if (throwable instanceof IOException) {
-                log.info("retry scheduled");
-                // schedule retry
-                return Flowable.timer(RETRY_DELAY, TimeUnit.MILLISECONDS);
-            }
-            // propagate unexpected error
-            return Flowable.error(throwable);
-        }));
-    }
+		intervalPublisher
+				.observeOn(Schedulers.newThread())
+				.subscribe(aLong -> log.info(String.valueOf(aLong)));
+
+		intervalPublisher
+				.doOnNext(aLong -> log.debug("emitted: " + aLong))
+				.onBackpressureBuffer(capacity, () -> log.warn("backpressure buffer overflow. dropping oldest"), BackpressureOverflowStrategy.DROP_OLDEST)
+				.observeOn(Schedulers.newThread())
+				.doOnNext(aLong -> log.debug("processing: " + aLong))
+				.buffer(windowSize)
+				.doOnNext(aLong -> log.debug("processing window: " + aLong))
+				//                .observeOn(Schedulers.newThread())
+				.map(longs -> longs.stream()
+						.map(ts -> Timestamp.builder().ts(ts).build())
+						.collect(Collectors.toList()))
+				.flatMap(longs -> repository.saveAll(longs)
+						.doOnNext(timestamp -> log.info("saved: " + timestamp))
+						.doOnError(error -> log.error("failed to save into DB.", error))
+						.observeOn(Schedulers.newThread())
+						.retryWhen(throwableFlowable -> throwableFlowable.flatMap(throwable -> {
+							//                            if (throwable instanceof IOException || throwable.getCause() instanceof IOException) {
+							log.info("retry scheduled");
+							// schedule retry
+							return Flowable.timer(retryDelayInMillis, TimeUnit.MILLISECONDS);
+							//                            }
+							// propagate unexpected error
+							//                            return Flowable.error(throwable);
+						})), false, 1)
+				.doOnError(throwable -> log.info("persistence failed", throwable))
+				.blockingSubscribe();
+	}
 }
