@@ -6,7 +6,6 @@ import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -21,10 +20,10 @@ import io.ydanneg.model.TimestampRepository;
 @Slf4j
 public class TimeCollectorService {
 
-	@Value("${io.ydanneg.timecollector.db.retry.delay:5000}")
+	@Value("${io.ydanneg.timecollector.retry:5000}")
 	private Long retryDelayInMillis;
 
-	@Value("${io.ydanneg.timecollector.timestamp.period:1000}")
+	@Value("${io.ydanneg.timecollector.period:1000}")
 	private Long timestampPeriodInMillis;
 
 	@Value("${io.ydanneg.timecollector.capacity:5000}")
@@ -33,59 +32,96 @@ public class TimeCollectorService {
 	@Value("${io.ydanneg.timecollector.window:5}")
 	private int windowSize;
 
-	@Autowired
-	private TimestampRepository repository;
-
-	@Autowired
+	private final TimestampRepository repository;
 	private final TimestampService timestampService;
-	@Autowired
-	private final TimestampDaoService timestampDaoService;
 
-	public void test() {
-		System.out.println("--START--");
+	public void print() {
+		// find all records from DB
 		final Long total = repository.findAll()
+				// map into just a primitive ts
 				.map(Timestamp::getTs)
-				.doOnNext(System.out::println)
-				.doOnError(System.out::println)
+				// and then into string
+				.map(String::valueOf)
+				// print into STDOUT
+				.doOnNext(this::printAndLog)
+				// print error into STDERR
+				.doOnError(error -> printAndLogError("ERROR", error))
+				// count total
 				.count()
+				// block until complete
 				.blockingGet();
 
 		System.out.println("Total: " + total);
-		System.out.println("--END--");
 	}
 
-	public void startService() {
+	public void collect() {
+		// prepare a publisher that generates timestamps every 'timestampPeriodInMillis' period.
+		// subscription is required to start emitting items
 		final Flowable<Long> intervalPublisher = timestampService.getTimestamps(timestampPeriodInMillis);
 
+		// first subscriber just prints generated timestamp immediately
 		intervalPublisher
+				// observing and printing in a dedicated thread
 				.observeOn(Schedulers.newThread())
-				.subscribe(aLong -> log.info(String.valueOf(aLong)));
+				// write ts into STDOUT and logger
+				.subscribe(ts -> printAndLog(String.valueOf(ts)));
 
+		// second subscriber to persist generated timestamps
+		// it uses back-pressure with configurable buffer size '{capacity}'
+		// splits emitted stream into bulks of '{window}' items
+		// saves into MongoDB reactive repository
+		// detects failure and schedules retry in '{retry}' period (infinitely :) )
 		intervalPublisher
-				.doOnNext(aLong -> log.debug("emitted: " + aLong))
+				// log emitted item
+				.doOnNext(ts -> log.debug("emitted: " + ts))
+				// use buffer back-pressure with size of '{capacity}'. Overflow of this buffer will drop OLDEST items.
 				.onBackpressureBuffer(capacity, () -> log.warn("backpressure buffer overflow. dropping oldest"), BackpressureOverflowStrategy.DROP_OLDEST)
+				// change to a new thread to process back-pressured items
 				.observeOn(Schedulers.newThread())
-				.doOnNext(aLong -> log.debug("processing: " + aLong))
+				// log back-pressured item
+				.doOnNext(ts -> log.debug("processing: " + ts))
+				// split into bulk of '{window}' items to optimize persistence
 				.buffer(windowSize)
-				.doOnNext(aLong -> log.debug("processing window: " + aLong))
-				//                .observeOn(Schedulers.newThread())
-				.map(longs -> longs.stream()
-						.map(ts -> Timestamp.builder().ts(ts).build())
+				.doOnNext(tsList -> log.debug("processing window: " + tsList))
+				// map raw timestamps into list of entities
+				.map(tsList -> tsList.stream()
+						// map into Entity
+						.map(ts -> Timestamp.builder()
+								.ts(ts)
+								.build())
+						// collect into list
 						.collect(Collectors.toList()))
-				.flatMap(longs -> repository.saveAll(longs)
-						.doOnNext(timestamp -> log.info("saved: " + timestamp))
-						.doOnError(error -> log.error("failed to save into DB.", error))
+				// map stream into persistence
+				.flatMap(entities -> repository.saveAll(entities)
+						// log a save attempt
+						.doOnSubscribe(subscription -> log.debug("saving..."))
+						// log saved entity
+						.doOnNext(savedEntity -> log.debug("saved: " + savedEntity))
+						// print and log saving error
+						.doOnError(error -> printAndLogError("Error saving into DB. retrying in " + retryDelayInMillis + " ms", error))
+						// change thread (not necessary actually)
 						.observeOn(Schedulers.newThread())
+						// schedule retry for previous saveAll operation
+						// flatMap concurrency is '1' to keep order (to not accept next items while waiting for this retry, back-pressure buffer will collect items)
 						.retryWhen(throwableFlowable -> throwableFlowable.flatMap(throwable -> {
-							//                            if (throwable instanceof IOException || throwable.getCause() instanceof IOException) {
-							log.info("retry scheduled");
-							// schedule retry
+							log.debug("retry scheduled");
+							// schedule retry on any repository error
+							// TODO: handle only IO related errors
 							return Flowable.timer(retryDelayInMillis, TimeUnit.MILLISECONDS);
-							//                            }
-							// propagate unexpected error
-							//                            return Flowable.error(throwable);
 						})), false, 1)
-				.doOnError(throwable -> log.info("persistence failed", throwable))
+				// print and log unhandled error
+				.doOnError(throwable -> printAndLogError("unexpected error", throwable))
+				// block current thread until complete (actually never) or interrupted
 				.blockingSubscribe();
+	}
+
+	private void printAndLog(String text) {
+		System.out.println(text);
+		log.info(text);
+	}
+
+	private void printAndLogError(String text, Throwable throwable) {
+		System.err.println(text + ": " + throwable.toString());
+		log.error(text, throwable);
 	}
 }

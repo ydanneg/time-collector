@@ -7,7 +7,6 @@ import java.util.Arrays;
 import lombok.extern.slf4j.Slf4j;
 
 import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Option;
@@ -34,49 +33,34 @@ public class SpringBootConsoleApplication implements CommandLineRunner {
 	private TimeCollectorService timeCollectorService;
 
 	public static void main(String[] args) {
-
-		//disabled banner, don't want to see the spring logo
 		SpringApplication app = new SpringApplication(SpringBootConsoleApplication.class);
 		app.setBannerMode(Banner.Mode.OFF);
 		app.run(args);
-
-		//SpringApplication.run(SpringBootConsoleApplication.class, args);
 	}
 
 	@Override
 	public void run(String... args) {
-		System.out.println("args: " + Arrays.toString(args));
-		Options options = new Options();
+		System.out.println("starting with args: " + Arrays.toString(args));
 
-		Option input = new Option(OPT_PRINT, OPT_LONG_PRINT, false, OPT_PRINT_DESCRIPTION);
+		final Option input = new Option(OPT_PRINT, OPT_LONG_PRINT, false, OPT_PRINT_DESCRIPTION);
 		input.setRequired(false);
 
+		final Options options = new Options();
 		options.addOption(input);
 
-		CommandLineParser parser = new DefaultParser();
-		HelpFormatter formatter = new HelpFormatter();
-		CommandLine cmd;
-
 		try {
-			cmd = parser.parse(options, args);
+			CommandLine cl = new DefaultParser().parse(options, args);
+			if (cl.hasOption(OPT_LONG_PRINT)) {
+				System.out.println("printing collected timestamps");
+				timeCollectorService.print();
+			} else {
+				System.out.println("starting timestamp collector service");
+				timeCollectorService.collect();
+			}
+			exit(0);
 		} catch (ParseException e) {
-			e.printStackTrace();
-			log.trace("unknown command line parameters: {}", Arrays.toString(args));
-			formatter.printHelp(HELP_TITLE, options);
-			System.exit(1);
-			return;
+			new HelpFormatter().printHelp(HELP_TITLE, options);
+			exit(1);
 		}
-
-		if (cmd.hasOption(OPT_LONG_PRINT)) {
-			// TODO: start print service
-			log.info("printing collected timestamps");
-			timeCollectorService.test();
-		} else {
-			// TODO: collect and log timestamps
-			log.info("starting time collector service");
-			timeCollectorService.startService();
-		}
-
-		exit(0);
 	}
 }
