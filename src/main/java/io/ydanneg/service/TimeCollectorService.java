@@ -107,7 +107,8 @@ public class TimeCollectorService {
 							log.debug("retry scheduled");
 							// schedule retry on any repository error
 							// TODO: handle only IO related errors
-							return Flowable.timer(retryDelayInMillis, TimeUnit.MILLISECONDS);
+							return Flowable.timer(retryDelayInMillis, TimeUnit.MILLISECONDS)
+									.doOnNext(throwable1 -> printAndLog("retrying save into DB..."));
 						})), false, 1)
 				// print and log unhandled error
 				.doOnError(throwable -> printAndLogError("unexpected error", throwable))
@@ -121,7 +122,7 @@ public class TimeCollectorService {
 	}
 
 	private void printAndLogError(String text, Throwable throwable) {
-		System.err.println(text + ": " + throwable.toString());
+		System.err.println(text + "\ncause: " + throwable.getMessage());
 		log.error(text, throwable);
 	}
 }
